@@ -1,0 +1,146 @@
+
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h> 
+#include <SoftwareSerial.h> 
+#define PIR 2 
+#define SOUND 3 
+#define BUTTON 5 
+#define LED 8 
+#define BUZZER 9 
+SoftwareSerial gsm(10, 11); 
+LiquidCrystal_I2C lcd(0x27, 16, 2); 
+// ── STATE ───────────────────────────── 
+bool triggered = false; 
+bool lastButtonState = HIGH; 
+void setup() { 
+pinMode(PIR, INPUT); 
+pinMode(SOUND, INPUT); 
+pinMode(BUTTON, INPUT_PULLUP); 
+pinMode(LED, OUTPUT); 
+pinMode(BUZZER, OUTPUT); 
+Serial.begin(9600); 
+gsm.begin(9600); 
+// ✅ LCD INIT (IMPORTANT) 
+lcd.init(); 
+lcd.backlight(); 
+ 
+   
+ 
+ 
+  lcd.setCursor(0,0); 
+  lcd.print("System Ready"); 
+ 
+  Serial.println("System Ready"); 
+} 
+ 
+void loop() { 
+ 
+  bool pirState = digitalRead(PIR); 
+  bool soundState = digitalRead(SOUND); 
+  bool buttonState = digitalRead(BUTTON); 
+ 
+  // ── BUTTON STATUS ───────────────── 
+  if (buttonState != lastButtonState) { 
+ 
+    if (buttonState == LOW) { 
+      Serial.println("BUTTON PRESSED"); 
+ 
+      lcd.clear(); 
+      lcd.setCursor(0,0); 
+      lcd.print("Manual Mode"); 
+    } else { 
+      Serial.println("BUTTON RELEASED"); 
+ 
+      lcd.clear(); 
+      lcd.setCursor(0,0); 
+      lcd.print("System Ready"); 
+    } 
+ 
+    lastButtonState = buttonState; 
+  } 
+ 
+  // 🔴 MANUAL MODE 
+  if (buttonState == LOW) { 
+    triggerAlert("MANUAL ALERT"); 
+    delay(3000); 
+    return; 
+  } 
+ 
+17  
+  
+   
+ 
+  // 🟢 AUTOMATIC MODE 
+  if (pirState == HIGH && soundState == HIGH && !triggered) { 
+ 
+    Serial.println("START"); 
+    triggered = true; 
+ 
+    lcd.clear(); 
+    lcd.setCursor(0,0); 
+    lcd.print("Checking AI..."); 
+  } 
+ 
+  // 🔄 RECEIVE FROM PYTHON 
+  if (Serial.available()) { 
+    String msg = Serial.readStringUntil('\n'); 
+    msg.trim(); 
+ 
+    if (msg == "ALERT") { 
+      Serial.println("ALERT RECEIVED"); 
+      triggerAlert("AUTO ALERT"); 
+    } 
+ 
+    if (msg == "RESET") { 
+      Serial.println("RESET RECEIVED"); 
+ 
+      triggered = false; 
+ 
+      lcd.clear(); 
+      lcd.setCursor(0,0); 
+      lcd.print("System Ready"); 
+    } 
+  } 
+ 
+  delay(200); 
+} 
+ 
+// ── 🔥 PASSIVE BUZZER FUNCTION ───────── 
+void beep() { 
+  tone(BUZZER, 1000);  // single tone (no ambulance) 
+  delay(500); 
+noTone(BUZZER); 
+delay(500); 
+} 
+// ── ALERT FUNCTION ──────────────────── 
+void triggerAlert(String mode) { 
+lcd.clear(); 
+lcd.setCursor(0,0); 
+lcd.print("EMERGENCY!"); 
+lcd.setCursor(0,1); 
+lcd.print(mode); 
+digitalWrite(LED, HIGH); 
+// 🔊 SIMPLE BEEP (NOT SIREN) 
+for (int i = 0; i < 3; i++) { 
+beep(); 
+} 
+sendSMS(); 
+digitalWrite(LED, LOW); 
+} 
+// ── GSM FUNCTION ────────────────────── 
+void sendSMS() { 
+lcd.clear(); 
+lcd.setCursor(0,0); 
+lcd.print("Sending SMS..."); 
+gsm.println("AT+CMGF=1"); 
+delay(1000); 
+gsm.println("AT+CMGS=\"+91XXXXXXXXXX\""); 
+delay(1000); 
+gsm.print("Emergency come fast at location"); 
+delay(1000); 
+19  
+gsm.write(26); 
+lcd.clear(); 
+lcd.setCursor(0,0); 
+lcd.print("SMS Sent"); 
+}
