@@ -1,0 +1,147 @@
+import os 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+import cv2 
+import numpy as np 
+import requests 
+import time 
+import serial 
+from ultralytics import YOLO 
+from deepface import DeepFace 
+# ── CONFIG ─────────────────────────────── 
+ESP32_URL = "http://10.71.234.238/capture" 
+arduino = serial.Serial('COM3', 9600, timeout=1)   # ⚠️ change COM if needed 
+model = YOLO("yolov8n.pt") 
+gender_buffer = [] 
+BUFFER_SIZE = 5 
+# ── GET FRAME ──────────────────────────── 
+def get_frame(): 
+try: 
+r = requests.get(ESP32_URL, timeout=5) 
+img = np.frombuffer(r.content, np.uint8) 
+frame = cv2.imdecode(img, cv2.IMREAD_COLOR) 
+if frame is None: 
+return None 
+return cv2.resize(frame, (640, 480)) 
+ 
+   
+ 
+    except: 
+        return None 
+ 
+# ── MAIN LOOP ──────────────────────────── 
+while True: 
+ 
+    # 🔄 WAIT FOR ARDUINO SIGNAL 
+    if arduino.in_waiting: 
+        cmd = arduino.readline().decode().strip() 
+ 
+        if cmd == "START": 
+ 
+            print("AI Triggered by Arduino") 
+ 
+            frame = get_frame() 
+            if frame is None: 
+                print("Camera not available") 
+                arduino.write(b'RESET\n') 
+                continue 
+ 
+            # ── YOLO DETECTION ─────────── 
+            results = model(frame, imgsz=256) 
+            persons = [] 
+ 
+            for r in results: 
+                for box in r.boxes: 
+                    cls = int(box.cls[0]) 
+                    label = model.names[cls] 
+ 
+                    if label == "person": 
+                        x1, y1, x2, y2 = map(int, box.xyxy[0]) 
+                        persons.append((x1, y1, x2, y2)) 
+ 
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), 
+                                      (0, 255, 0), 2) 
+ 
+            # ── GENDER DETECTION ───────── 
+            genders = [] 
+ 
+            for (x1, y1, x2, y2) in persons: 
+21  
+  
+   
+ 
+                h = y2 - y1 
+                face_crop = frame[y1:y1 + int(h * 0.5), x1:x2] 
+ 
+                if face_crop.size == 0: 
+                    continue 
+ 
+                try: 
+                    result = DeepFace.analyze( 
+                        face_crop, 
+                        actions=["gender"], 
+                        enforce_detection=False, 
+                        detector_backend="opencv" 
+                   if not isinstance(result, list): 
+                        result = [result] 
+ 
+                    for r in result: 
+                        woman = r["gender"]["Woman"] 
+                        man   = r["gender"]["Man"] 
+ 
+                        if woman > man: 
+                            genders.append("Woman") 
+                        else: 
+                            genders.append("Man") 
+ 
+                except: 
+                    genders.append("Unknown") 
+ 
+            if len(genders) == 0: 
+                genders = ["Unknown"] 
+ 
+            # ── SMOOTHING ─────────────── 
+            gender_buffer.append(genders) 
+            if len(gender_buffer) > BUFFER_SIZE: 
+                gender_buffer.pop(0) 
+ 
+            all_votes = [g for frame_votes in gender_buffer for g in frame_votes] 
+ 
+            woman_count = all_votes.count("Woman") 
+            man_count   = all_votes.count("Man") 
+ 
+ 
+   
+ 
+            if woman_count > man_count: 
+                final_gender = ["Woman"] 
+            elif man_count > woman_count: 
+                final_gender = ["Man"] 
+            else: 
+                final_gender = ["Unknown"] 
+ 
+            # ── DECISION LOGIC ────────── 
+            print("Persons:", len(persons)) 
+            print("Genders:", final_gender) 
+ 
+            if len(persons) >= 2 and "Woman" in final_gender and "Man" in 
+final_gender: 
+                print("⚠️ ALERT CONDITION") 
+                arduino.write(b'ALERT\n') 
+            else: 
+                print("SAFE / IGNORE") 
+ 
+            # ── SHOW OUTPUT ───────────── 
+            cv2.putText(frame, f"Genders: {final_gender}", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.8, (0, 255, 255), 2) 
+ 
+            cv2.imshow("Smart Safety System", frame) ---- 
+            cv2.waitKey(1) 
+ 
+            # 🔄 RESET SYSTEM 
+            time.sleep(1) 
+            arduino.write(b'RESET\n') 
+ 
+    time.sleep(0.1) 
+ 
+cv2.destroyAllWindows() 
